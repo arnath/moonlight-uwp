@@ -121,6 +121,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="BouncyCastleCryptographyManager.cs" />
+    <Compile Include="Gfe\HttpGfeClient.cs" />
+    <Compile Include="Gfe\ServerInfoResponse.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <EmbeddedResource Include="Properties\Moonlight.Logic.rd.xml" />
   </ItemGroup>

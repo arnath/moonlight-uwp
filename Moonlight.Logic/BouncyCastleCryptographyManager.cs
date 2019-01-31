@@ -21,6 +21,12 @@
 
     public class BouncyCastleCryptographyManager
     {
+        /// <summary>
+        /// The certificate is usually around 2400 bytes. Ensure the memory stream
+        /// buffer is large enough to fit the whole thing without expanding.
+        /// </summary>
+        private const int CertificateBufferSize = 2560;
+
         private const string CertificateFriendlyName = "Moonlight Xbox";
 
         /// <summary>
@@ -30,9 +36,9 @@
 
         private readonly SecureRandom secureRandom;
 
-        public BouncyCastleCryptographyManager(IRandomGenerator randomGenerator)
+        public BouncyCastleCryptographyManager()
         {
-            this.secureRandom = new SecureRandom(randomGenerator);
+            this.secureRandom = new SecureRandom(new CryptoApiRandomGenerator());
         }
 
         public async Task<X509Certificate2> GetHttpsCertificateAsync()
@@ -90,7 +96,7 @@
                 new AsymmetricKeyEntry(keyPair.Private),
                 new X509CertificateEntry[] { certificateEntry });
             byte[] pfxDataBytes;
-            using (MemoryStream memoryStream = new MemoryStream(512))
+            using (MemoryStream memoryStream = new MemoryStream(CertificateBufferSize))
             {
                 store.Save(memoryStream, CertificatePassword.ToCharArray(), this.secureRandom);
                 pfxDataBytes = memoryStream.ToArray();
