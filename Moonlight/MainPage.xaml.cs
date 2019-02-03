@@ -3,7 +3,9 @@
     using System.Security.Cryptography.X509Certificates;
     using Windows.UI.Xaml;
     using Windows.UI.Xaml.Controls;
-    using Moonlight.Xbox.Logic;
+    using Moonlight.Xbox.Logic.Cryptography;
+    using Org.BouncyCastle.Security;
+    using Org.BouncyCastle.Crypto.Digests;
 
     /// <summary>
     /// An empty page that can be used on its own or navigated to within a Frame.
@@ -15,7 +17,10 @@
         public MainPage()
         {
             this.InitializeComponent();
-            this.cryptographyManager = new BouncyCastleCryptographyManager();
+            this.cryptographyManager = 
+                new BouncyCastleCryptographyManager(
+                    new Sha256Digest(),
+                    SignerUtilities.GetSigner("SHA256withRSA"));
         }
 
         private async void CreateCertificateButton_Click(object sender, RoutedEventArgs e)
