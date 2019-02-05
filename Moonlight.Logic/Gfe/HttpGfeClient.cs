@@ -11,7 +11,7 @@
     using Moonlight.Xbox.Logic.Cryptography;
     using BouncyCastleX509Certificate = Org.BouncyCastle.X509.X509Certificate;
 
-    public class HttpGfeClient
+    public class HttpGfeClient : IDisposable
     {
         /// <summary>
         /// Use the same unique ID for all Moonlight clients so we can quit games
@@ -24,7 +24,7 @@
 
         private readonly HttpClient httpClient;
 
-        private readonly HttpClientHandler httpClientHandler;
+        private readonly X509Certificate2 certificate;
 
         private readonly Uri baseUrlHttp;
 
@@ -32,10 +32,20 @@
 
         private readonly BouncyCastleCryptographyManager cryptographyManager;
 
-        public HttpGfeClient()
+        public HttpGfeClient(X509Certificate2 certificate)
         {
-            this.httpClientHandler = new HttpClientHandler();
-            this.httpClientHandler.ServerCertificateCustomValidationCallback = (a, b, c, d) => true;
+            if (certificate == null)
+            {
+                throw new ArgumentNullException(nameof(certificate));
+            }
+
+            this.certificate = certificate;
+
+            HttpClientHandler httpClientHandler = new HttpClientHandler();
+            httpClientHandler.ServerCertificateCustomValidationCallback = (a, b, c, d) => true;
+            httpClientHandler.ClientCertificates.Add(certificate);
+
+            this.httpClient = new HttpClient(httpClientHandler);
         }
 
         public Task<Result<ServerInfoResponse>> GetServerInfoAsync()
@@ -53,12 +63,8 @@
             // Generate salt value.
             byte[] salt = this.cryptographyManager.GenerateRandomBytes(16);
 
-            // Get or create HTTPs certificate and add it to the HTTP client.
-            X509Certificate2 certificate = await this.cryptographyManager.GetOrCreateHttpsCertificateAsync();
-            this.httpClientHandler.ClientCertificates.Add(certificate);
-
             // Get PEM encoded certificate;
-            byte[] pemCertificate = BouncyCastleCryptographyManager.GetPemEncodedCertificate(certificate);
+            byte[] pemCertificate = BouncyCastleCryptographyManager.GetPemEncodedCertificate(this.certificate);
 
             // Get the server certificate.
             string queryString =
@@ -112,7 +118,7 @@
                 this.cryptographyManager.HashData(
                     BouncyCastleCryptographyManager.ConcatenateByteArrays(
                         serverChallenge, 
-                        BouncyCastleCryptographyManager.GetCertificateSignature(certificate), 
+                        BouncyCastleCryptographyManager.GetCertificateSignature(this.certificate), 
                         clientSecret));
             byte[] encryptedChallengeResponse = cipher.Encrypt(challengeResponseHash);
 
@@ -150,7 +156,7 @@
             }
 
             // Create our signed secret.
-            byte[] signedSecret = this.cryptographyManager.SignData(clientSecret, certificate.PrivateKey);
+            byte[] signedSecret = this.cryptographyManager.SignData(clientSecret, this.certificate.PrivateKey);
             byte[] clientPairingSecret = 
                 BouncyCastleCryptographyManager.ConcatenateByteArrays(
                     clientSecret,
@@ -177,6 +183,12 @@
             }
 
             return Result.Succeeded();
+        }
+
+        public void Dispose()
+        {
+            this.Dispose(true);
+            GC.SuppressFinalize(this);
         }
 
         private Task<Result<TResponse>> DoGetRequestAsync<TResponse>(Uri baseUri, string resourcePath) where TResponse : class
@@ -224,6 +236,14 @@
             {
                 // Log?
                 return Result<TResponse>.Failed((int)GfeErrorCode.UnknownError, e);
+            }
+        }
+
+        private void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                this.httpClient.Dispose();
             }
         }
     }
