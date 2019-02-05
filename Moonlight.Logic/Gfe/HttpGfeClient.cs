@@ -2,6 +2,7 @@
 {
     using System;
     using System.Collections.Concurrent;
+    using System.IO;
     using System.Linq;
     using System.Net.Http;
     using System.Security.Cryptography.X509Certificates;
@@ -37,7 +38,7 @@
             this.httpClientHandler.ServerCertificateCustomValidationCallback = (a, b, c, d) => true;
         }
 
-        public Task<ServerInfoResponse> GetServerInfoAsync()
+        public Task<Result<ServerInfoResponse>> GetServerInfoAsync()
         {
             return this.DoGetRequestAsync<ServerInfoResponse>(
                 this.baseUrlHttps,
@@ -65,22 +66,21 @@
                     "deviceName=roth&updateState=1&phrase=getservercert&salt={0}&clientcert={1}",
                     BouncyCastleCryptographyManager.BytesToHex(salt),
                     BouncyCastleCryptographyManager.BytesToHex(pemCertificate));
-            PairResponse pairResponse = await this.DoGetRequestAsync<PairResponse>(this.baseUrlHttp, "/pair", queryString);
-            if (pairResponse == null || pairResponse.Paired != 1)
+            Result<PairResponse> result = await this.DoGetRequestAsync<PairResponse>(this.baseUrlHttp, "/pair", queryString);
+            if (!result.IsSuccess || result.Value.Paired != 1)
             {
-                // TODO: Change this error code.
-                return new Result(0, "Pairing failed with unknown error.");
+                return result;
             }
 
-            if (string.IsNullOrWhiteSpace(pairResponse.PlainCert))
+            if (string.IsNullOrWhiteSpace(result.Value.PlainCert))
             {
                 // Attempting to pair while another device is pairing will cause GFE
                 // to give an empty cert in the response.
-                // TODO: Change this error code.
-                return new Result(0, "Pairing already in progress");
+                return Result.Failed((int)GfeErrorCode.PairingAlreadyInProgress, "Pairing already in progress");
             }
 
-            BouncyCastleX509Certificate serverCertificate = this.cryptographyManager.ParseCertificate(pairResponse.PlainCert);
+            // Parse the server certificate.
+            BouncyCastleX509Certificate serverCertificate = this.cryptographyManager.ParseCertificate(result.Value.PlainCert);
 
             // Salt and hash pin and use it to create an AES cipher.
             byte[] saltedAndHashedPin = this.cryptographyManager.HashData(BouncyCastleCryptographyManager.SaltData(salt, pin));
@@ -92,16 +92,14 @@
 
             // Send the challenge to the server.
             queryString = $"devicename=roth&updateState=1&clientchallenge={BouncyCastleCryptographyManager.BytesToHex(encryptedClientChallenge)}";
-            pairResponse = await this.DoGetRequestAsync<PairResponse>(this.baseUrlHttp, "/pair", queryString);
-            if (pairResponse == null || pairResponse.Paired != 1 || string.IsNullOrWhiteSpace(pairResponse.ChallengeResponse))
+            result = await this.DoGetRequestAsync<PairResponse>(this.baseUrlHttp, "/pair", queryString);
+            if (!result.IsSuccess || result.Value.Paired != 1 || string.IsNullOrWhiteSpace(result.Value.ChallengeResponse))
             {
-                // TODO: Change this error code.
-                // TODO: Unpair here.
-                return new Result(0, "Pairing failed with unknown error.");
+                return result;
             }
 
             // Decrypt and parse the server's challenge response and subsequent challenge.
-            byte[] decryptedServerChallengeResponse = cipher.Decrypt(BouncyCastleCryptographyManager.HexToBytes(pairResponse.ChallengeResponse));
+            byte[] decryptedServerChallengeResponse = cipher.Decrypt(BouncyCastleCryptographyManager.HexToBytes(result.Value.ChallengeResponse));
             byte[] serverResponse = new byte[this.cryptographyManager.HashDigestSize];
             byte[] serverChallenge = new byte[16];
             Array.Copy(decryptedServerChallengeResponse, serverResponse, this.cryptographyManager.HashDigestSize);
@@ -120,16 +118,14 @@
 
             // Send the challenge response to the server.
             queryString = $"devicename=roth&updateState=1&serverchallengeresp={BouncyCastleCryptographyManager.BytesToHex(encryptedChallengeResponse)}";
-            pairResponse = await this.DoGetRequestAsync<PairResponse>(this.baseUrlHttp, "/pair", queryString);
-            if (pairResponse == null || pairResponse.Paired != 1 || string.IsNullOrWhiteSpace(pairResponse.PairingSecret))
+            result = await this.DoGetRequestAsync<PairResponse>(this.baseUrlHttp, "/pair", queryString);
+            if (!result.IsSuccess || result.Value.Paired != 1 || string.IsNullOrWhiteSpace(result.Value.PairingSecret))
             {
-                // TODO: Change this error code.
-                // TODO: Unpair here.
-                return new Result(0, "Pairing failed with unknown error.");
+                return result;
             }
 
             // Get the server's signed secret.
-            byte[] serverSecretResponse = BouncyCastleCryptographyManager.HexToBytes(pairResponse.PairingSecret);
+            byte[] serverSecretResponse = BouncyCastleCryptographyManager.HexToBytes(result.Value.PairingSecret);
             byte[] serverSecret = new byte[16];
             byte[] serverSignature = new byte[256];
             Array.Copy(serverSecretResponse, serverSecret, serverSecret.Length);
@@ -138,9 +134,7 @@
             // Ensure the authenticity of the data.
             if (!this.cryptographyManager.VerifySignature(serverSecret, serverSignature, serverCertificate))
             {
-                // TODO: Change this error code.
-                // TODO: Unpair here.
-                return new Result(0, "Pairing failed with invalid signature.");
+                return Result.Failed((int)GfeErrorCode.PairingInvalidSignature, "Pairing failed with invalid signature.");
             }
 
             // Ensure the server challenge matched what we expected (the PIN was correct).
@@ -152,9 +146,7 @@
                         serverSecret));
             if (!serverChallengeResponseHash.SequenceEqual(serverResponse))
             {
-                // TODO: Change this error code.
-                // TODO: Unpair here.
-                return new Result(0, "Pairing failed with incorrect PIN.");
+                return Result.Failed((int)GfeErrorCode.PairingIncorrectPin, "Pairing failed with incorrect PIN.");
             }
 
             // Create our signed secret.
@@ -166,36 +158,33 @@
 
             // Send it to the server.
             queryString = $"devicename=roth&updateState=1&clientpairingsecret={BouncyCastleCryptographyManager.BytesToHex(clientPairingSecret)}";
-            pairResponse = await this.DoGetRequestAsync<PairResponse>(this.baseUrlHttp, "/pair", queryString);
-            if (pairResponse == null || pairResponse.Paired != 1)
+            result = await this.DoGetRequestAsync<PairResponse>(this.baseUrlHttp, "/pair", queryString);
+            if (!result.IsSuccess || result.Value.Paired != 1)
             {
-                // TODO: Change this error code.
-                // TODO: Unpair here.
-                return new Result(0, "Pairing failed with unknown error.");
+                return result;
             }
 
-            // Do the initial challenge (seems neccessary for us to show as paired).
-            pairResponse = 
+            // Do the initial challenge (seems neccessary for us to show as paired). Note that
+            // this must be done over HTTPs.
+            result = 
                 await this.DoGetRequestAsync<PairResponse>(
                     this.baseUrlHttps, 
                     "/pair", 
                     "devicename=roth&updateState=1&phrase=pairchallenge");
-            if (pairResponse == null || pairResponse.Paired != 1)
+            if (!result.IsSuccess || result.Value.Paired != 1)
             {
-                // TODO: Change this error code.
-                // TODO: Unpair here.
-                return new Result(0, "Pairing failed with unknown error.");
+                return result;
             }
 
-            return new Result();
+            return Result.Succeeded();
         }
 
-        private Task<TResponse> DoGetRequestAsync<TResponse>(Uri baseUri, string resourcePath) where TResponse : class
+        private Task<Result<TResponse>> DoGetRequestAsync<TResponse>(Uri baseUri, string resourcePath) where TResponse : class
         {
             return this.DoGetRequestAsync<TResponse>(baseUri, resourcePath, null);
         }
 
-        private async Task<TResponse> DoGetRequestAsync<TResponse>(
+        private async Task<Result<TResponse>> DoGetRequestAsync<TResponse>(
             Uri baseUrl, 
             string resourcePath, 
             string queryString) where TResponse : class
@@ -217,19 +206,24 @@
                     if (!response.IsSuccessStatusCode)
                     {
                         // Log?
-                        return null;
+                        return 
+                            Result<TResponse>.Failed(
+                                (int)GfeErrorCode.HttpError, 
+                                $"HTTP request to {requestUrl} failed with error code {response.StatusCode}.");
                     }
 
                     XmlSerializer serializer = XmlSerializers.GetOrAdd(
                         typeof(TResponse),
                         (type) => new XmlSerializer(type));
-                    return serializer.Deserialize(await response.Content.ReadAsStreamAsync()) as TResponse;
+                    TResponse responseObject = serializer.Deserialize(await response.Content.ReadAsStreamAsync()) as TResponse;
+
+                    return Result<TResponse>.Succeeded(responseObject);
                 }
             }
             catch (Exception e)
             {
                 // Log?
-                return null;
+                return Result<TResponse>.Failed((int)GfeErrorCode.UnknownError, e);
             }
         }
     }

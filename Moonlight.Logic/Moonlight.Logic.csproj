@@ -122,6 +122,7 @@
   <ItemGroup>
     <Compile Include="Cryptography\AesCipher.cs" />
     <Compile Include="Cryptography\BouncyCastleCryptographyManager.cs" />
+    <Compile Include="Gfe\GfeErrorCode.cs" />
     <Compile Include="Gfe\HttpGfeClient.cs" />
     <Compile Include="Gfe\PairResponse.cs" />
     <Compile Include="Gfe\ServerInfoResponse.cs" />
