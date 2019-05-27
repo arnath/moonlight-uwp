@@ -48,11 +48,18 @@
             this.httpClient = new HttpClient(httpClientHandler);
         }
 
-        public Task<Result<ServerInfoResponse>> GetServerInfoAsync()
+        public async Task<Result<ServerInfoResponse>> GetServerInfoAsync()
         {
-            return this.DoGetRequestAsync<ServerInfoResponse>(
-                this.baseUrlHttps,
-                "/serverinfo");
+            // Attempt to request server info over HTTPs. This will not work if the machine
+            // is not already paired but returns more info.
+            Result<ServerInfoResponse> result = await this.DoGetRequestAsync<ServerInfoResponse>(this.baseUrlHttps, "/serverinfo");
+            if (!result.IsSuccess)
+            {
+                // If we couldn't do it over HTTPs, try again over HTTP.
+                result = await this.DoGetRequestAsync<ServerInfoResponse>(this.baseUrlHttp, "/serverinfo");
+            }
+
+            return result;
         }
 
         public async Task<Result> PairAsync()
@@ -183,6 +190,11 @@
             }
 
             return Result.Succeeded();
+        }
+
+        public Task GetAppListAsync()
+        {
+            return this.DoGetRequestAsync<string>(this.baseUrlHttps, "/applist");
         }
 
         public void Dispose()
